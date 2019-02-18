@@ -1,0 +1,283 @@
+---
+title: "HarvardX: PH125.9x - Data Science Own Project Report"
+author: "Aparajithan Rajendran"
+date: "February 17, 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##--------------------------------------------------------------------------------------------
+
+## Introduction
+
+This is a capstone 'Own' project report generated as part of the course 'Data Science' (HarvardX: PH125.9x) at Harvard University in collaboration with edx.
+
+The data set, obtained from UC Irvine Machine Learning repository, consists of the expression levels of 77 proteins/protein modifications 
+that produced detectable signals in the nuclear fraction of cortex. There are 38 control mice and 34 trisomic mice (Down syndrome), for a total of 72 mice.
+In the experiments, 15 measurements were registered of each protein per sample/mouse.
+Therefore, for control mice, there are 38x15, or 570 measurements, and for trisomic mice, there are 34x15, or 510 measurements.
+The dataset contains a total of 1080 measurements per protein. Each measurement can be considered as an independent sample/mouse. 
+The eight classes of mice are described based on features such as genotype, behavior and treatment.
+According to genotype, mice can be control or trisomic. According to behavior, some mice have been stimulated to learn (context-shock)
+and others have not (shock-context) and in order to assess the effect of the drug memantine in recovering the ability to learn in trisomic mice,
+some mice have been injected with the drug and others have not.
+
+
+> Goal
+
+This is a multivariate logistic regression or multinomial classification problem. There are 8 classes of mice observed:
+
+4 types of control mice
+c-CS-s: control mice, stimulated to learn, injected with saline (9 mice) 
+c-CS-m: control mice, stimulated to learn, injected with memantine (10 mice) 
+c-SC-s: control mice, not stimulated to learn, injected with saline (9 mice) 
+c-SC-m: control mice, not stimulated to learn, injected with memantine (10 mice) 
+
+4 types of trisomic mice
+t-CS-s: trisomy mice, stimulated to learn, injected with saline (7 mice) 
+t-CS-m: trisomy mice, stimulated to learn, injected with memantine (9 mice) 
+t-SC-s: trisomy mice, not stimulated to learn, injected with saline (9 mice) 
+t-SC-m: trisomy mice, not stimulated to learn, injected with memantine (9 mice) 
+
+The ultimate aim is to identify subsets of proteins out of 77 proteins/protein modifications that are discriminant between the classes.
+
+
+> Key Steps
+
+There are four key steps performed in order to build recommendation system that could predict ratings on the validation set.
+
+Step #1: Initial Data Setup
+
+Step #2: Apply RandomForest algorithm and Variable Importance method to identify discriminant features
+
+Step #3: Apply RandomForest algorithm and Principle Component Analysis for dimensionality reduction
+
+Step #4: Cross verify the discriminant features to conclude the results
+
+
+##--------------------------------------------------------------------------------------------
+
+## Methodology
+
+The above stated steps are explained in a detail manner below.
+
+> Step #1: Initial Data Setup
+
+The following steps are performed as part of initial/one-time data setup
+
++ Task #1: Downloading if the cleaned data set is not found in the working directory
+
++ Task #2: Data Exploration
+    
++ Task #3: Data Cleaning
+    
++ Task #4: Restoring Cleaned Data for future reuse
+
+```{r}
+if (file.exists("edx_cleaned.Rda")) {
+    load("edx_cleaned.Rda")
+} else {
+    # The following code was provided by the instructors:
+    
+    #############################################################
+    # Create edx set
+    #############################################################
+    
+    # Note: this process could take a couple of minutes
+    
+    if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+    if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+    if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+    if(!require(readxl)) install.packages("readxl", repos = "http://cran.us.r-project.org")
+
+    # Mice Cortex Nuclear 1080 dataset:
+    # https://archive.ics.uci.edu/ml/machine-learning-databases/00342/Data_Cortex_Nuclear.xls
+
+    # Task #1: Downloading if the cleaned data set is not found in the working directory
+    URL <- "https://archive.ics.uci.edu/ml/machine-learning-databases/00342/Data_Cortex_Nuclear.xls"
+    fileName <- "/Data_Cortex_Nuclear.xls"
+    download.file(URL, paste(getwd(),fileName, sep = ""), mode="wb")
+
+    # Please place the file directly under your documents directory or wherever the getwd() is showing below
+    print("The XLS file is placed under directory:")
+    print(paste(getwd(),fileName, sep = ""))
+    
+    library(readxl)
+    edx <- read_excel(paste(getwd(),fileName, sep = ""))
+
+    # Task #2: Data Exploration
+    print(dim(edx))
+    
+    print(names(edx))
+    
+    # Task #3: Data Cleaning
+    edx_cleaned <- edx %>% mutate(MouseID = as.numeric(as.factor(MouseID)), Genotype = as.numeric(as.factor(Genotype)), Treatment = as.numeric(as.factor(Treatment)), Behavior = as.numeric(as.factor(Behavior)), class = as.factor(class))
+
+    for(i in 2:ncol(edx_cleaned)-1){
+        edx_cleaned[is.na(edx_cleaned[,i]), i] <- 0
+    }
+
+    # To make sure that there is zero NA values
+    sum(is.na(edx_cleaned))
+
+    # Task #4: Restoring Cleaned Data for future reuse
+    ## The next line was introduced by me to avoid creating the datasets every time
+    save(edx_cleaned, file = "edx_cleaned.Rda")
+}
+
+### Loading packages
+library(randomForest)
+library(tidyverse)
+library(caret)
+```
+
++ Task #5: Data Partioning into Training (70%) & Test (30%) datasets
+
+```{r}
+# Step #5: Data Partioning into Training (70%) & Test (30%) datasets
+ind <- sample(2, nrow(edx_cleaned), replace=TRUE, prob=c(0.7,0.3))
+trainData_x <- edx_cleaned[ind == 1,] %>% dplyr::select(-MouseID, -Genotype, -Treatment, -Behavior)
+trainData_y <- trainData_x$class
+trainData_x <- trainData_x %>% dplyr::select(-class)
+testData_x <- edx_cleaned[ind == 2,] %>% dplyr::select(-MouseID, -Genotype, -Treatment, -Behavior)
+testData_y <- testData_x$class
+testData_x <- testData_x %>% dplyr::select(-class)
+```
+
+> Step #2: Apply RandomForest algorithm and Variable Importance method to identify discriminant features
+
+The following steps are performed as part of model training & feature selection
+
++ Task #6: Train ML model for the entire set of features using RandomForest algorithm
+
+```{r}
+# Task #6: Train ML model for the entire set of features using RandomForest algorithm
+model_rf <- randomForest(trainData_y ~. , data = trainData_x, proximity=TRUE)
+confusionMatrix(predict(model_rf), trainData_y)
+```
+
++ Task #7: Identify the subset of proteins which are discriminant by variable importance > 10
+
+```{r}
+# Task #7: Identify the subset of proteins which are discriminant by variable importance > 10
+varImpPlot(model_rf, main='Variable Importance Plot: Base Model')
+imp <- importance(model_rf)
+protein_imp <- data.frame(protein = rownames(imp), meanVal = imp)
+protein_iv_10 <- protein_imp[which(protein_imp[order(-protein_imp$MeanDecreaseGini),]$MeanDecreaseGini > 10),]$protein
+iv.used_10 <- length(protein_iv_10)
+```
+
++ Task #8: Train ML model only for the subset of proteins which are discriminant
+
+```{r}
+# Task #8: Train ML model only for the subset of proteins which are discriminant
+trainData_x_iv_10 <- trainData_x %>% dplyr::select(protein_iv_10)
+model_rf_iv_10 <- randomForest(trainData_y ~., data=trainData_x_iv_10, proximity=TRUE)
+confusionMatrix(predict(model_rf_iv_10), trainData_y)
+```
+
++ Step #9: Run predictions on the test data using the trained model
+
+```{r}
+# Task #9: Run predictions on the test data using the trained model
+testData_x_iv_10 <- testData_x %>% dplyr::select(protein_iv_10)
+predictions_test_y_iv_10 <- predict(model_rf_iv_10, testData_x_iv_10)
+confusionMatrix(predictions_test_y_iv_10, testData_y)
+ggplot(testData_x_iv_10)+
+    geom_point(aes(y=testData_y, x=predictions_test_y_iv_10, color=as.factor(testData_y)))+
+    ylab('Actual')+
+    xlab('Predicted')+
+    ggtitle('Actual vs Predicted - Feature Selection by Variable Importance')+
+    geom_abline(colour="grey")
+```
+Note: Accuracy is over 98% over test dataset with 21 protein
+
+> Step #3: Apply RandomForest algorithm and Principle Component Analysis for dimensionality reduction
+
++ Task #10: Applying PCA to cross verify the selection of the subset of proteins which are discriminant
+
+```{r}
+# Task #10: Applying PCA to cross verify the selection of the subset of proteins which are discriminant
+trainData_x_pca <- prcomp(trainData_x, center = TRUE, scale. = TRUE)
+```
+
++ Task #11: Exploring PCA and Variance Explained
+
+```{r}
+# Task #11: Exploring PCA and Variance Explained
+summary(trainData_x_pca)
+```
+
+Note: The summary shows that, by PC21, the proportion of the variance explained is more than 90%
+
+
+```{r}
+str(trainData_x_pca)
+var_explained <- cumsum(trainData_x_pca$sdev^2/sum(trainData_x_pca$sdev^2))
+```
+Note: str function gives the glimpse of the features such as "DYRK1A_N" "ITSN1_N" "BDNF_N" "NR1_N" which are the top four of 20 features that explain the 90% variances
+
++ Task #12: Identify the subset of proteins which are discriminant by PCA with variance explained > 90%
+
+```{r}
+# Task #12: Identify the subset of proteins which are discriminant by PCA with variance explained > 90%
+pc.used_90 <- which(var_explained>=0.90)[1]
+trainData_x_pc_90 <- trainData_x[,1:pc.used_90]
+protein_pc_90 <- colnames(trainData_x_pc_90)
+```
+
++ Task #13: Train ML model for the subset of proteins (identified by PCA) using RandomForest algorithm
+
+```{r}
+# Task #13: Train ML model for the subset of proteins (identified by PCA) using RandomForest algorithm
+model_rf_pc_90 <- randomForest(trainData_y ~., data=trainData_x_pc_90, proximity=TRUE)
+confusionMatrix(predict(model_rf_pc_90), trainData_y)
+```
+
++ Task #14: Run predictions on the test data using the trained model
+
+```{r}
+# Task #14: Run predictions on the test data using the trained model
+testData_x_pc_90 <- testData_x[,1:pc.used_90]
+predictions_test_y_pc_90 <- predict(model_rf_pc_90, testData_x_pc_90)
+confusionMatrix(predictions_test_y_pc_90, testData_y)
+ggplot(testData_x_pc_90)+
+    geom_point(aes(y=testData_y, x=predictions_test_y_pc_90, color=as.factor(testData_y)))+
+    ylab('Actual')+
+    xlab('Predicted')+
+    ggtitle('Actual vs Predicted - Feature Selection by PCA')+
+    geom_abline(colour="grey")
+```
+
+##--------------------------------------------------------------------------------------------
+
+## Results
+
+> Step #4: Cross verify the discriminant features to conclude the results
+
++ Task #15: Obtain results by comparing the discriminant proteins identified by both processes
+
+```{r}
+# Task #15: Obtain results by comparing the top 20 discriminant proteins identified by both processes
+sum(head(protein_iv_10, 20) == head(protein_pc_90, 20))
+```
+Note: Matching number of Proteins/Protein modifications 20
+
+##--------------------------------------------------------------------------------------------
+
+## Conclusion
+
+  Feature selection by Variable Importance seems to yield little bit better accuracy compared to the one by PCA but that is obvious outcome due to consideration of the additional features by the former method.
+  However, both methods identify the same set of top 20 discriminant proteins/protein modifications out of 77 successfully.
+  Here is the list:
+
+```{r}
+head(protein_pc_90, 20)
+```
+
+> End
